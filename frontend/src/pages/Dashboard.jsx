@@ -12,55 +12,80 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(false);
   const [loadingComments, setLoadingComments] = useState(false);
   const [visibleCount, setVisibleCount] = useState(COMMENTS_PER_PAGE);
+  const [error, setError] = useState("");
   const commentContainerRef = useRef(null);
 
   const loadVideos = async () => {
-    if (!pageId.trim()) return;
+    if (!pageId.trim()) {
+      setError("Please enter a Page ID");
+      return;
+    }
+    setError("");
     setLoading(true);
-    const res = await axios.get(
-      `http://localhost:5000/api/facebook/videos/${pageId}`
-    );
-    setVideos(res.data.data || []);
-    setSelectedVideo(null);
+    try {
+      const res = await axios.get(
+        `http://localhost:5000/api/facebook/videos/${pageId}`
+      );
+      setVideos(res.data.data || []);
+      setSelectedVideo(null);
+      if (!res.data.data || res.data.data.length === 0) {
+        setError("No videos found for this Page ID");
+      }
+    } catch (err) {
+      setError("Failed to load videos. Check your token or Page ID.");
+      console.error(err);
+    }
     setLoading(false);
   };
 
   const loadComments = async (videoId) => {
     setSelectedVideo(videoId);
     setVisibleCount(COMMENTS_PER_PAGE);
+    setError("");
     setLoadingComments(true);
 
     if (!videoComments[videoId]) {
-      const res = await axios.get(
-        `http://localhost:5000/api/facebook/comments/${videoId}`
-      );
-      setVideoComments((prev) => ({
-        ...prev,
-        [videoId]: res.data.data || [],
-      }));
+      try {
+        const res = await axios.get(
+          `http://localhost:5000/api/facebook/comments/${videoId}`
+        );
+        setVideoComments((prev) => ({
+          ...prev,
+          [videoId]: res.data.data || [],
+        }));
+      } catch (err) {
+        setError("Failed to load comments.");
+        console.error(err);
+      }
     }
     setLoadingComments(false);
   };
 
-  const exportComments = () => {
-    if (!selectedVideo || !videoComments[selectedVideo]) return;
-    const comments = videoComments[selectedVideo];
-    const csvHeader = "Comment ID,User ID,User Name,Message,Created Time\n";
-    const csvRows = comments.map((c) => {
-      const message = (c.message || "").replace(/"/g, '""');
-      const userId = c.from?.id || "";
-      const userName = c.from?.name || "Unknown";
-      return `"${c.id}","${userId}","${userName}","${message}","${c.created_time}"`;
-    });
-    const csvContent = csvHeader + csvRows.join("\n");
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-    saveAs(blob, `comments_${selectedVideo}.csv`);
-  };
+const exportComments = () => {
+  if (!selectedVideo || !videoComments[selectedVideo]) return;
+  const comments = videoComments[selectedVideo];
+
+  // BOM for UTF-8 so Excel opens Sinhala correctly
+  const BOM = "\uFEFF";
+  
+  const csvHeader = "Comment ID,User ID,User Name,Message,Created Time\n";
+  
+  const csvRows = comments.map((c) => {
+    const message = (c.message || "").replace(/"/g, '""');
+    const userId = c.from?.id || "";
+    const userName = (c.from?.name || "Unknown").replace(/"/g, '""');
+    return `"${c.id}","${userId}","${userName}","${message}","${c.created_time}"`;
+  });
+  
+  const csvContent = BOM + csvHeader + csvRows.join("\n");
+  
+  const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+  saveAs(blob, `comments_${selectedVideo}.csv`);
+};
 
   const handleScroll = useCallback(() => {
     const container = commentContainerRef.current;
     if (!container) return;
-
     const { scrollTop, scrollHeight, clientHeight } = container;
     if (scrollTop + clientHeight >= scrollHeight - 200) {
       setVisibleCount((prev) => prev + COMMENTS_PER_PAGE);
@@ -76,7 +101,7 @@ export default function Dashboard() {
     <div className="min-h-screen p-8" style={{ backgroundColor: "var(--color-bg-main)" }}>
 
       {/* TOP BAR */}
-      <div className="flex items-end gap-4 mb-8">
+      <div className="flex items-end gap-4 mb-6">
         <div className="flex-1">
           <label className="block text-sm mb-2" style={{ color: "var(--color-text-secondary)" }}>
             Page ID
@@ -90,7 +115,7 @@ export default function Dashboard() {
             }}
             placeholder="Enter Facebook Page ID"
             value={pageId}
-            onChange={(e) => setPageId(e.target.value)}
+            onChange={(e) => { setPageId(e.target.value); setError(""); }}
             onKeyDown={(e) => e.key === "Enter" && loadVideos()}
           />
         </div>
@@ -99,20 +124,26 @@ export default function Dashboard() {
           disabled={loading}
           className="px-6 py-3 rounded text-sm font-medium"
           style={{
-            backgroundColor: "var(--color-btn-primary)",
+            backgroundColor: loading ? "#5C0000" : "var(--color-btn-primary)",
             color: "#FFFFFF",
-            opacity: loading ? 0.6 : 1,
           }}
         >
           {loading ? "Loading..." : "Load Videos"}
         </button>
       </div>
 
+      {/* ERROR MESSAGE */}
+      {error && (
+        <div className="p-3 mb-4 rounded text-sm" style={{ backgroundColor: "#2D1414", color: "#C41E3A", border: "1px solid #5C0000" }}>
+          {error}
+        </div>
+      )}
+
       {/* STAT CARDS */}
       <div className="grid grid-cols-3 gap-4 mb-8">
         {[
           { label: "Total Videos", value: videos.length },
-          { label: "Selected Video", value: selectedVideoData?.description?.slice(0, 40) || "None" },
+          { label: "Selected Video", value: selectedVideoData?.title?.slice(0, 40) || "None" },
           { label: "Comments Loaded", value: currentComments.length.toLocaleString() },
         ].map((stat, i) => (
           <div
@@ -152,7 +183,7 @@ export default function Dashboard() {
           </h3>
 
           <div className="flex-1 overflow-y-auto space-y-2">
-            {videos.length === 0 && (
+            {videos.length === 0 && !loading && (
               <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>
                 No videos loaded yet
               </p>
@@ -170,8 +201,7 @@ export default function Dashboard() {
               >
                 <div className="flex-1 min-w-0">
                   <p className="text-sm truncate" style={{ color: "var(--color-text-primary)" }}>
-                    {v.description?.slice(0, 80) || "Untitled Video"}
-                  </p>
+{v.title || v.description?.slice(0, 80) || `Video ${v.id?.slice(-6)}`}                  </p>
                   <p className="text-xs mt-1" style={{ color: "var(--color-text-muted)" }}>
                     ID: {v.id}
                   </p>
@@ -184,7 +214,7 @@ export default function Dashboard() {
           </div>
         </div>
 
-           {/* COMMENTS PANEL */}
+        {/* COMMENTS PANEL */}
         <div
           className="p-5 rounded flex flex-col"
           style={{
@@ -239,13 +269,11 @@ export default function Dashboard() {
               <div
                 key={c.id}
                 className="p-3"
-                style={{
-                  borderBottom: "1px solid var(--color-border-light)",
-                }}
+                style={{ borderBottom: "1px solid var(--color-border-light)" }}
               >
                 <div className="flex items-center justify-between mb-1">
                   <span className="text-xs font-medium" style={{ color: "var(--color-primary-light)" }}>
-                    {c.from?.name || "Unknown"}
+                    {c.from?.name || "Facebook User"}
                   </span>
                   <span className="text-xs" style={{ color: "var(--color-text-muted)" }}>
                     {new Date(c.created_time).toLocaleDateString()}
